@@ -969,23 +969,25 @@ bool performLineClipping(vtkPolyData* streamLines, vtkModifiedBSPTree* tree, int
 	int nIntersections = 0;
 	bool foundEndpoint = false;
 	std::vector<vtkIdType> idList;
-	for (int j = 2; j < ids->GetNumberOfIds(); j++) {
+
+	// handle initial condition // IL: put here
+	if (ids->GetNumberOfIds() > 2) {
+		double p0[3],p1[3];
+		streamLines->GetPoint(ids->GetId(0), p0);
+		streamLines->GetPoint(ids->GetId(1), p1);
+		idList.push_back(outputPoints->GetNumberOfPoints());
+		outputPoints->InsertNextPoint(p0);
+
+		/*idList.push_back(outputPoints->GetNumberOfPoints());
+		outputPoints->InsertNextPoint(p1);*/
+
+		length = sqrt(vtkMath::Distance2BetweenPoints(p0, p1));
+	}
+
+	for (int j = ids->GetNumberOfIds()-1; j >= 2; j--) {    // IL: inverse search for fast clipping
 		double p1[3], p2[3];
 		streamLines->GetPoint(ids->GetId(j-1), p1);
 		streamLines->GetPoint(ids->GetId(j), p2);
-		
-		// handle initial condition
-		if (j == 2) {
-			double p0[3];
-			streamLines->GetPoint(ids->GetId(0), p0);
-			idList.push_back(outputPoints->GetNumberOfPoints());
-			outputPoints->InsertNextPoint(p0);
-			
-			idList.push_back(outputPoints->GetNumberOfPoints());
-			outputPoints->InsertNextPoint(p1);
-			
-			length = sqrt(vtkMath::Distance2BetweenPoints(p0, p1));
-		}
 		
 		int subId;
 		double x[3] = {-1,-1,-1};
@@ -1006,8 +1008,8 @@ bool performLineClipping(vtkPolyData* streamLines, vtkModifiedBSPTree* tree, int
 		//        cout << testLine << "; " << x[0] << "," << x[1] << "," << x[2] << endl;
 		
 		
-		idList.push_back(outputPoints->GetNumberOfPoints());
-		outputPoints->InsertNextPoint(p2);
+		/*idList.push_back(outputPoints->GetNumberOfPoints());
+		outputPoints->InsertNextPoint(p2);*/ // IL: Save only end-points
 		length += sqrt(vtkMath::Distance2BetweenPoints(p1, p2));
 	}
 	
@@ -1015,6 +1017,11 @@ bool performLineClipping(vtkPolyData* streamLines, vtkModifiedBSPTree* tree, int
 		outputLines->InsertNextCell(idList.size(), &idList[0]);
 		return true;
 	} else {
+	    // IL: put the last point of the stream
+	    double x[3];
+	    idList.push_back(outputPoints->GetNumberOfPoints());
+	    streamLines->GetPoint(ids->GetId(ids->GetNumberOfIds()-1), x);
+		outputPoints->InsertNextPoint(x);
 		outputLines->InsertNextCell(idList.size(), &idList[0]);
 	}
 	return false;
@@ -1520,7 +1527,7 @@ void runExtractSlice(Options& opts, StringVector& args) {
 	vio.writeFile(args[1], sgOut);
 }
 
-void runPrintTraceCorrespondence(Options& opts, string inputMeshName, string inputStreamName, string outputWarpedMeshName, vtkPolyData* srcmesh = NULL) {
+void runPrintTraceCorrespondence_(Options& opts, string inputMeshName, vtkDataSet* strmesh, string outputWarpedMeshName, vtkPolyData* srcmesh) {
 	vtkIO vio;
 	
 	if (srcmesh == NULL) {
@@ -1534,8 +1541,6 @@ void runPrintTraceCorrespondence(Options& opts, string inputMeshName, string inp
 	
 	double center[3];
 	srcmesh->GetCenter(center);
-	
-	vtkDataSet* strmesh = vio.readDataFile(inputStreamName);
 	
 	int traceDirection = StreamTracer::FORWARD;
 	string dir = opts.GetString("-traceDirection", "forward");
@@ -1682,6 +1687,11 @@ void runPrintTraceCorrespondence(Options& opts, string inputMeshName, string inp
 //	}
 }
 
+void runPrintTraceCorrespondence(Options& opts, string inputMeshName, string inputStreamName, string outputWarpedMeshName, vtkPolyData* srcmesh = NULL) {
+	vtkDataSet* strmesh = vio.readDataFile(inputStreamName);
+	runPrintTraceCorrespondence_(opts, inputMeshName, strmesh, outputWarpedMeshName, srcmesh);
+}
+
 
 void runWarpMesh(Options& opts, StringVector& args) {
 	vtkIO vio;
@@ -1818,16 +1828,18 @@ void runSphericalMapping(Options& opts, StringVector& args) {
 
 	if (opts.GetString("-traceDirection") == "backward") {
 		vtkPolyData* streams = performStreamTracer(opts, laplaceField, sphere, inputData);
-		vio.writeFile(outputStream, streams);
-		runPrintTraceCorrespondence(opts, outputSphere, outputStream, outputMesh, sphere);
+		//vio.writeFile(outputStream, streams);
+		//runPrintTraceCorrespondence(opts, outputSphere, outputStream, outputMesh, sphere);
+		runPrintTraceCorrespondence_(opts, outputSphere, streams, outputMesh, sphere);
 	} else {
 		vtkPolyData* streams = performStreamTracer(opts, laplaceField, inputData, sphere);
-		vio.writeFile(outputStream, streams);
-		runPrintTraceCorrespondence(opts, inputObj, outputStream, outputMesh, inputData);
+		//vio.writeFile(outputStream, streams);
+		//runPrintTraceCorrespondence(opts, inputObj, outputStream, outputMesh, inputData);
+		runPrintTraceCorrespondence_(opts, inputObj, streams, outputMesh, inputData);
 	}
 	
 
-	vio.writeFile(outputObj, inputData);
+	//vio.writeFile(outputObj, inputData);
 	
 }
 
