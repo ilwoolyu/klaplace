@@ -7,12 +7,9 @@
 //
 
 #include "kvolume.h"
-#include "kstreamtracer.h"
 #include "kgeometry.h"
-
-#include "piOptions.h"
-
 #include "vtkio.h"
+#include "piOptions.h"
 
 #include <vtkCellData.h>
 #include <vtkPointData.h>
@@ -33,7 +30,6 @@
 #include <vtkPolyDataToImageStencil.h>
 #include <vtkImageToStructuredGrid.h>
 #include <vtkStreamTracer.h>
-
 
 #include <ctime>
 #include <algorithm>
@@ -222,7 +218,8 @@ vtkDataSet* createGrid(vtkPolyData* osurf, vtkPolyData* isurf, const int dims, s
 // create a structured grid with the size of input
 // convert the grid to polydata
 // create the intersection between the grid and the polydata
-void runFillGrid(Options& opts, StringVector& args) {
+vtkDataSet* runFillGrid(Options& opts, StringVector& args) {
+	vtkDataSet* grid = NULL;
 	if (opts.GetBool("-humanBrain")) {
 		string outputFile = args[2];
 		
@@ -231,8 +228,8 @@ void runFillGrid(Options& opts, StringVector& args) {
 		vtkPolyData* isurf = vio.readFile(args[1]);
 		
 		size_t insideCountOut = 0;
-		vtkDataSet* grid = createGrid(osurf, isurf, opts.GetStringAsInt("-dims", 100), insideCountOut);
-		vio.writeFile(outputFile, grid);
+		grid = createGrid(osurf, isurf, opts.GetStringAsInt("-dims", 100), insideCountOut);
+		//vio.writeFile(outputFile, grid);
 		
 		cout << "Inside Voxels: " << insideCountOut << endl;
 	} else {
@@ -248,7 +245,7 @@ void runFillGrid(Options& opts, StringVector& args) {
 //		vio.writeFile(outputFile, output);
 //		cout << "Inside Voxels: " << insideCount << endl;
 	}
-	
+	return grid;
 }
 
 
@@ -758,12 +755,12 @@ void runPrintTraceCorrespondence_(Options& opts, string inputMeshName, vtkDataSe
 	double center[3];
 	srcmesh->GetCenter(center);
 	
-	int traceDirection = StreamTracer::FORWARD;
+	int traceDirection = vtkStreamTracer::FORWARD;
 	string dir = opts.GetString("-traceDirection", "forward");
 	if (dir == "backward") {
-		traceDirection = StreamTracer::BACKWARD;
+		traceDirection = vtkStreamTracer::BACKWARD;
 	} else if (dir == "both") {
-		traceDirection = StreamTracer::BOTH;
+		traceDirection = vtkStreamTracer::BOTH;
 	}
 	
 	
@@ -817,9 +814,6 @@ void runPrintTraceCorrespondence_(Options& opts, string inputMeshName, vtkDataSe
 		
 		sphereRadiusArr->SetValue(j, warpedPointNorm);
 
-//		cout << "cell " << j << ": " << nPts << ", " << s << " => " << e << endl;
-//		cout << "cell " << j << ": " << qe[0] << "," << qe[1] << "," << qe[2] << endl;
-		
 //
 //		srcmesh->GetPoint(seedId, pj);
 //		pointArr->SetTupleValue(seedId, pj);
@@ -918,9 +912,9 @@ void runSurfaceCorrespondence(Options& opts, StringVector& args) {
 	string outputMesh = prefix + "_warpedMesh.vtp";
 	string outputObj = prefix + "_object.vtp";
 
-    cout << "Output grid: " << outputGrid << endl;
+    //cout << "Output grid: " << outputGrid << endl;
     //cout << "Output laplacian field: " << outputField << endl;
-    cout << "Output streamlines: " << outputStream << endl;
+    //cout << "Output streamlines: " << outputStream << endl;
     cout << "Output warped mesh: " << outputMesh << endl;
 	
     string inputFieldFile = opts.GetString("-inputField");
@@ -939,10 +933,10 @@ void runSurfaceCorrespondence(Options& opts, StringVector& args) {
         fillGridArgs.push_back(inputObj1);
         fillGridArgs.push_back(outputGrid);
         opts.SetBool("-humanBrain", true);
-        runFillGrid(opts, fillGridArgs);
+        laplaceField = runFillGrid(opts, fillGridArgs);
         
         // compute laplace map
-        laplaceField = vio.readDataFile(outputGrid);
+        //laplaceField = vio.readDataFile(outputGrid);
         
         const double dt = opts.GetStringAsReal("-dt", 0.125);
         const int numIter = opts.GetStringAsInt("-iter", 10000);
@@ -968,12 +962,14 @@ void runSurfaceCorrespondence(Options& opts, StringVector& args) {
 
 	if (opts.GetString("-traceDirection") == "backward") {
 		vtkPolyData* streams = performStreamTracer(opts, laplaceField, inputData2, inputData);
-		vio.writeFile(outputStream, streams);
-		runPrintTraceCorrespondence(opts, inputObj2, outputStream, outputMesh, inputData2);
+		/*vio.writeFile(outputStream, streams);
+		runPrintTraceCorrespondence(opts, inputObj2, outputStream, outputMesh, inputData2);*/
+		runPrintTraceCorrespondence_(opts, inputObj2, streams, outputMesh, inputData2);
 	} else {
 		vtkPolyData* streams = performStreamTracer(opts, laplaceField, inputData, inputData2);
-		vio.writeFile(outputStream, streams);
-		runPrintTraceCorrespondence(opts, inputObj1, outputStream, outputMesh, inputData);
+		/*vio.writeFile(outputStream, streams);
+		runPrintTraceCorrespondence(opts, inputObj1, outputStream, outputMesh, inputData);*/
+		runPrintTraceCorrespondence_(opts, inputObj1, streams, outputMesh, inputData);
 	}
 	
 

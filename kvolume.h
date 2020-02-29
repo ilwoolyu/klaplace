@@ -17,7 +17,7 @@ class vtkPolyData;
 
 vtkDataSet* createGridForSphereLikeObject(vtkPolyData* input, int& insideCount, int dims = 100, bool insideOutOn = false);
 void runExtractBorderline(pi::Options& opts, pi::StringVector& args);
-void runFillGrid(pi::Options& opts, pi::StringVector& args);
+vtkDataSet* runFillGrid(pi::Options& opts, pi::StringVector& args);
 
 void processVolumeOptions(pi::Options& opts);
 void processVolumeCommands(pi::Options& opts, pi::StringVector& args);
