@@ -501,67 +501,49 @@ bool performLineClipping(vtkPolyData* streamLines, vtkModifiedBSPTree* tree, int
 	/// - Iterate over all points in a line
 	vtkIdList* ids = lineToClip->GetPointIds();
 	
-	
 	/// - Identify a line segment included in the line
-	int nIntersections = 0;
 	bool foundEndpoint = false;
 	std::vector<vtkIdType> idList;
 
-	// handle initial condition // IL: put here
-	if (ids->GetNumberOfIds() > 2) {
-		double p0[3],p1[3];
-		streamLines->GetPoint(ids->GetId(0), p0);
-		streamLines->GetPoint(ids->GetId(1), p1);
-		idList.push_back(outputPoints->GetNumberOfPoints());
-		outputPoints->InsertNextPoint(p0);
-
-		/*idList.push_back(outputPoints->GetNumberOfPoints());
-		outputPoints->InsertNextPoint(p1);*/
-
-		length = sqrt(vtkMath::Distance2BetweenPoints(p0, p1));
-	}
-
-	for (int j = ids->GetNumberOfIds()-1; j >= 2; j--) {    // IL: inverse search for fast clipping
+	double x[3] = {-1,-1,-1};
+	int j = ids->GetNumberOfIds() - 1;
+	for (; j >= 2 && !foundEndpoint; j--) {    // IL: inverse search for fast clipping
 		double p1[3], p2[3];
 		streamLines->GetPoint(ids->GetId(j-1), p1);
 		streamLines->GetPoint(ids->GetId(j), p2);
 		
 		int subId;
-		double x[3] = {-1,-1,-1};
 		double t = 0;
 		
 		double pcoords[3] = { -1, };
-		int testLine = tree->IntersectWithLine(p1, p2, 0.01, t, x, pcoords, subId);
-		if (testLine) {
-			nIntersections ++;
-			if (nIntersections > 0) {
-				idList.push_back(outputPoints->GetNumberOfPoints());
-				outputPoints->InsertNextPoint(x);
-				length += sqrt(vtkMath::Distance2BetweenPoints(p1, x));
-				foundEndpoint = true;
-				break;
-			}
-		}
-		//        cout << testLine << "; " << x[0] << "," << x[1] << "," << x[2] << endl;
-		
-		
-		/*idList.push_back(outputPoints->GetNumberOfPoints());
-		outputPoints->InsertNextPoint(p2);*/ // IL: Save only end-points
-		length += sqrt(vtkMath::Distance2BetweenPoints(p1, p2));
+		foundEndpoint = tree->IntersectWithLine(p1, p2, 0.01, t, x, pcoords, subId);
+		//cout << testLine << "; " << x[0] << "," << x[1] << "," << x[2] << endl;
 	}
 	
-	if (foundEndpoint) {
-		outputLines->InsertNextCell(idList.size(), &idList[0]);
-		return true;
-	} else {
-	    // IL: put the last point of the stream
-	    double x[3];
-	    idList.push_back(outputPoints->GetNumberOfPoints());
-	    streamLines->GetPoint(ids->GetId(ids->GetNumberOfIds()-1), x);
+	if (ids->GetNumberOfIds() > 2) {
+		j++;
+		if (!foundEndpoint) {
+			streamLines->GetPoint(ids->GetId(j), x);
+		}
+		int b = max(0,j-2);
+		double p1[3], p2[3];
+		streamLines->GetPoint(ids->GetId(b), p1);
+		idList.push_back(outputPoints->GetNumberOfPoints());
+		outputPoints->InsertNextPoint(p1);
+		for (int k = b+1; k < j; k++) {
+			streamLines->GetPoint(ids->GetId(k), p2);
+			idList.push_back(outputPoints->GetNumberOfPoints());
+			outputPoints->InsertNextPoint(p2);
+			//length += sqrt(vtkMath::Distance2BetweenPoints(p1, p2));
+			p1[0] = p2[0]; p1[1] = p2[1]; p1[2] = p2[2];
+		}
+		idList.push_back(outputPoints->GetNumberOfPoints());
 		outputPoints->InsertNextPoint(x);
-		outputLines->InsertNextCell(idList.size(), &idList[0]);
+		//length += sqrt(vtkMath::Distance2BetweenPoints(p1, x));
 	}
-	return false;
+	outputLines->InsertNextCell(idList.size(), &idList[0]);
+
+	return foundEndpoint;
 }
 
 
@@ -641,13 +623,14 @@ vtkPolyData* performStreamTracerPostProcessing(vtkPolyData* streamLines, vtkPoly
 		}
 		
 		cout << "# of clipping failure: " << noLines << endl;
-		
+
+		streamLines->Delete();
+
 		vtkPolyData* outputStreamLines = vtkPolyData::New();
 		outputStreamLines->SetPoints(outputPoints);
 		outputStreamLines->SetLines(outputCells);
 		outputStreamLines->GetCellData()->AddArray(pointIds);
 		outputStreamLines->GetCellData()->AddArray(lengthArray);
-	
 		
 		vtkCleanPolyData* cleaner = vtkCleanPolyData::New();
 		cleaner->SetInputData(outputStreamLines);
@@ -731,13 +714,12 @@ vtkPolyData* performStreamTracer(Options& opts, vtkDataSet* inputData, vtkPolyDa
     
     tracer->Update();
 
-	
 	vtkPolyData* streamLines = tracer->GetOutput();
 //	streamLines->Print(cout);
 	
 //	vio.writeFile("streamlines.vtp", streamLines);
 	
-	return performStreamTracerPostProcessing(streamLines, inputSeedPoints, destSurf);
+	return streamLines;
 }
 
 void runPrintTraceCorrespondence_(Options& opts, string inputMeshName, vtkDataSet* strmesh, string outputWarpedMeshName, vtkPolyData* srcmesh) {
@@ -763,7 +745,6 @@ void runPrintTraceCorrespondence_(Options& opts, string inputMeshName, vtkDataSe
 		traceDirection = vtkStreamTracer::BOTH;
 	}
 	
-	
 	vtkNew<vtkDoubleArray> pointArr;
 	pointArr->SetName("SourcePoints");
 	pointArr->SetNumberOfComponents(3);
@@ -774,11 +755,6 @@ void runPrintTraceCorrespondence_(Options& opts, string inputMeshName, vtkDataSe
 	destPointArr->SetNumberOfComponents(3);
 	destPointArr->SetNumberOfTuples(srcmesh->GetNumberOfPoints());
 	
-	vtkNew<vtkDoubleArray> sphereRadiusArr;
-	sphereRadiusArr->SetName("SphereRadius");
-	sphereRadiusArr->SetNumberOfComponents(1);
-	sphereRadiusArr->SetNumberOfTuples(srcmesh->GetNumberOfPoints());
-	
 	vtkNew<vtkPoints> warpedPoints;
 	warpedPoints->DeepCopy(srcmesh->GetPoints());
 	
@@ -786,47 +762,24 @@ void runPrintTraceCorrespondence_(Options& opts, string inputMeshName, vtkDataSe
 	ploc->SetDataSet(srcmesh);
 	ploc->SetTolerance(0);
 	ploc->BuildLocator();
-	
-	
-	
-	const size_t nCells = strmesh->GetNumberOfCells();
+
 	vtkDataArray* seedIds = strmesh->GetCellData()->GetArray("PointIds");
 	
-	
+	const size_t nCells = strmesh->GetNumberOfCells();
 	for (size_t j = 0; j < nCells; j++) {
 		vtkCell* cell = strmesh->GetCell(j);
 		const size_t nPts = cell->GetNumberOfPoints();
 		if (nPts < 2) {
 			continue;
 		}
-		vtkIdType s = cell->GetPointId(0);
 		vtkIdType e = cell->GetPointId(nPts-1);
 		
-		double qs[3], qe[3], pj[3], spj[3], npj[3];
-		strmesh->GetPoint(s, qs);
+		double qe[3];
 		strmesh->GetPoint(e, qe);
 		
 		vtkIdType seedId = (vtkIdType) seedIds->GetTuple1(j);
 		warpedPoints->SetPoint(seedId, qe);
-		
-		vtkMath::Subtract(qe, center, npj);
-		double warpedPointNorm = vtkMath::Norm(npj);
-		
-		sphereRadiusArr->SetValue(j, warpedPointNorm);
-
-//
-//		srcmesh->GetPoint(seedId, pj);
-//		pointArr->SetTupleValue(seedId, pj);
-//		
-//		vtkMath::Subtract(pj, sphereCenter, npj);
-//		sphTxf->TransformPoint(npj, spj);
-//		sphrCoord->SetTupleValue(seedId, spj);
-//		
-//		destPointArr->SetTupleValue(seedId, qe);
-
 	}
-	
-	srcmesh->GetPointData()->AddArray(sphereRadiusArr.GetPointer());
 
 	struct InterpolateBrokenPoints {
 		InterpolateBrokenPoints(vtkPolyData* surf, vtkPoints* warpedPoints, vtkDataArray* seedIds) {
@@ -857,7 +810,8 @@ void runPrintTraceCorrespondence_(Options& opts, string inputMeshName, vtkDataSe
 				double p[3] = {0,}, q[3] = {0,};
 				set<vtkIdType>::iterator it = nbrs.begin();
 				for (; it != nbrs.end(); it++) {
-					if (find(brokenPoints.begin(), brokenPoints.end(), *it) == brokenPoints.end()) {
+					//if (find(brokenPoints.begin(), brokenPoints.end(), *it) == brokenPoints.end()) {
+					if (!binary_search(brokenPoints.begin(), brokenPoints.end(), *it)) {	// IL: binary search
 						warpedPoints->GetPoint(*it, q);
 						vtkMath::Add(p, q, p);
 					} else {
@@ -962,11 +916,15 @@ void runSurfaceCorrespondence(Options& opts, StringVector& args) {
 
 	if (opts.GetString("-traceDirection") == "backward") {
 		vtkPolyData* streams = performStreamTracer(opts, laplaceField, inputData2, inputData);
+		laplaceField->Delete();
+		streams = performStreamTracerPostProcessing(streams, inputData2, inputData);
 		/*vio.writeFile(outputStream, streams);
 		runPrintTraceCorrespondence(opts, inputObj2, outputStream, outputMesh, inputData2);*/
 		runPrintTraceCorrespondence_(opts, inputObj2, streams, outputMesh, inputData2);
 	} else {
 		vtkPolyData* streams = performStreamTracer(opts, laplaceField, inputData, inputData2);
+		laplaceField->Delete();
+		streams = performStreamTracerPostProcessing(streams, inputData, inputData2);
 		/*vio.writeFile(outputStream, streams);
 		runPrintTraceCorrespondence(opts, inputObj1, outputStream, outputMesh, inputData);*/
 		runPrintTraceCorrespondence_(opts, inputObj1, streams, outputMesh, inputData);
