@@ -475,12 +475,12 @@ void computeLaplacePDE(vtkDataSet* data, const double low, const double high, co
 	
 	// main iteration loop
 	for (size_t i = 1; i <= nIters; i++) {
-		if (i%500 == 0) {
+		/*if (i%500 == 0) {
 			cout << "iteration: " << i << "\t";
 			clock_t t2 = clock();
 			cout << (double) (t2-t1) / CLOCKS_PER_SEC * 1000 << " ms;" << endl;
 			t1 = t2;
-		}
+		}*/
 		grid.computeStep();
 	}
 	clock_t t2 = clock();
@@ -722,6 +722,148 @@ vtkPolyData* performStreamTracer(Options& opts, vtkDataSet* inputData, vtkPolyDa
 	return streamLines;
 }
 
+vtkPolyData* performStreamTracerBatch(Options& opts, vtkDataSet* inputData, vtkPolyData* inputSeedPoints, vtkPolyData* destSurf) {
+    if (inputData == NULL || inputSeedPoints == NULL) {
+        cout << "input vector field or seed points is null!" << endl;
+        return NULL;
+    }
+
+    if (destSurf == NULL) {
+        cout << "trace destination surface is null" << endl;
+        return NULL;
+    }
+
+	// set active velocity field
+	inputData->GetPointData()->SetActiveVectors("LaplacianGradientNorm");
+
+	/// - Converting the input points to the image coordinate
+	vtkPoints* points = inputSeedPoints->GetPoints();
+	const int nInputPoints = inputSeedPoints->GetNumberOfPoints();
+	cout << "# of seed points: " << nInputPoints << endl;
+
+	/// - Prepare the output for the input points
+	vtkDoubleArray* streamLineLengthPerPoint = vtkDoubleArray::New();
+	streamLineLengthPerPoint->SetNumberOfTuples(nInputPoints);
+	streamLineLengthPerPoint->SetName("Length");
+	streamLineLengthPerPoint->SetNumberOfComponents(1);
+	streamLineLengthPerPoint->FillComponent(0, 0);
+
+	vtkIntArray* lineCorrect = vtkIntArray::New();
+	lineCorrect->SetName("LineOK");
+	lineCorrect->SetNumberOfValues(nInputPoints);
+	lineCorrect->FillComponent(0, 0);
+
+	inputSeedPoints->GetPointData()->SetScalars(streamLineLengthPerPoint);
+	inputSeedPoints->GetPointData()->AddArray(lineCorrect);
+
+	// line clipping
+	vtkPoints* outputPoints = vtkPoints::New();
+	vtkCellArray* outputCells = vtkCellArray::New();
+
+	/// construct a tree locator
+	vtkModifiedBSPTree* tree = vtkModifiedBSPTree::New();
+	tree->SetDataSet(destSurf);
+	tree->BuildLocator();
+
+	vtkDoubleArray* lengthArray = vtkDoubleArray::New();
+	lengthArray->SetName("Length");
+
+	vtkIntArray* pointIds = vtkIntArray::New();
+	pointIds->SetName("PointIds");
+
+	vtkStreamTracer* tracer = vtkStreamTracer::New();
+	// tracer->SetInterpolatorTypeToDataSetPointLocator();
+	tracer->SetInterpolatorTypeToCellLocator();
+	tracer->SetMaximumPropagation(5000);
+	tracer->SetInitialIntegrationStep(0.01);
+	// tracer->SetMaximumIntegrationStep(0.1);
+	tracer->SetIntegratorTypeToRungeKutta45();
+	// tracer->SetIntegratorTypeToRungeKutta2();
+	tracer->SetInputData(inputData);
+	tracer->SetComputeVorticity(false);
+
+	string traceDirection = opts.GetString("-traceDirection", "forward");
+	if (traceDirection == "both") {
+		tracer->SetIntegrationDirectionToBoth();
+	} else if (traceDirection == "backward") {
+		tracer->SetIntegrationDirectionToBackward();
+		cout << "Backward Integration" << endl;
+	} else if (traceDirection == "forward") {
+		tracer->SetIntegrationDirectionToForward();
+		cout << "Forward Integration" << endl;
+	}
+
+	int noLines = 0;
+	vtkPolyData* poly = vtkPolyData::New();
+	tracer->SetSourceData(poly);
+	vtkPoints* point = vtkPoints::New();
+	poly->SetPoints(point);
+	int batch = nInputPoints / 8;
+
+	for (int i = 0; i < nInputPoints; i += batch) {
+		cout << "Batch: " << (i / batch + 1) << endl;
+		/// StreamTracer should have a point-wise gradient field
+		/// - Set up tracer (Use RK45, both direction, initial step 0.05, maximum propagation 500
+		point->Reset();
+		for (int j = i; j < min(i + batch, nInputPoints); j++) {
+			double p[3];
+			points->GetPoint(j, p);
+			point->InsertNextPoint(p);
+		}
+
+		tracer->Update();
+
+		vtkPolyData* streamLines = tracer->GetOutput();
+
+		streamLines->GetPointData()->Reset();
+		streamLines->BuildCells();
+		streamLines->BuildLinks();
+
+		//cout << "Assigning length to each source vertex ..." << endl;
+		vtkDataArray* seedIds = streamLines->GetCellData()->GetScalars("SeedIds");
+		if (seedIds) {
+			int nCells = streamLines->GetNumberOfCells();
+			for (int j = 0; j < nCells; j++) {
+				int pid = seedIds->GetTuple1(j);
+				double length = 0;
+				if (pid > -1) {
+					pid += i;
+					vtkCell* line = streamLines->GetCell(j);
+					/// - Assume that a line starts from a point on the input mesh and must meet at the opposite surface of the starting point.
+					bool lineAdded = performLineClipping(streamLines, tree, i, line, outputPoints, outputCells, length);
+					if (lineAdded) {
+						pointIds->InsertNextValue(pid);
+						lengthArray->InsertNextValue(length);
+						streamLineLengthPerPoint->SetValue(pid, length);
+						lineCorrect->SetValue(pid, 1);
+					} else {
+						pointIds->InsertNextValue(pid);
+						lengthArray->InsertNextValue(length);
+						streamLineLengthPerPoint->SetValue(pid, length);
+						lineCorrect->SetValue(pid, 2);
+						noLines++;
+					}
+				}
+			}
+		} else {
+			cout << "Can't find SeedIds" << endl;
+			return NULL;
+		}
+	}
+	cout << "# of clipping failure: " << noLines << endl;
+	vtkPolyData* outputStreamLines = vtkPolyData::New();
+	outputStreamLines->SetPoints(outputPoints);
+	outputStreamLines->SetLines(outputCells);
+	outputStreamLines->GetCellData()->AddArray(pointIds);
+	outputStreamLines->GetCellData()->AddArray(lengthArray);
+
+	vtkCleanPolyData* cleaner = vtkCleanPolyData::New();
+	cleaner->SetInputData(outputStreamLines);
+	cleaner->Update();
+
+	return cleaner->GetOutput();
+}
+
 void runPrintTraceCorrespondence_(Options& opts, string inputMeshName, vtkDataSet* strmesh, string outputWarpedMeshName, vtkPolyData* srcmesh) {
 	vtkIO vio;
 	
@@ -915,16 +1057,20 @@ void runSurfaceCorrespondence(Options& opts, StringVector& args) {
     }
 
 	if (opts.GetString("-traceDirection") == "backward") {
-		vtkPolyData* streams = performStreamTracer(opts, laplaceField, inputData2, inputData);
+		/*vtkPolyData* streams = performStreamTracer(opts, laplaceField, inputData2, inputData);
 		laplaceField->Delete();
-		streams = performStreamTracerPostProcessing(streams, inputData2, inputData);
+		streams = performStreamTracerPostProcessing(streams, inputData2, inputData);*/
+		vtkPolyData* streams = performStreamTracerBatch(opts, laplaceField, inputData2, inputData);
+		laplaceField->Delete();
 		/*vio.writeFile(outputStream, streams);
 		runPrintTraceCorrespondence(opts, inputObj2, outputStream, outputMesh, inputData2);*/
 		runPrintTraceCorrespondence_(opts, inputObj2, streams, outputMesh, inputData2);
 	} else {
-		vtkPolyData* streams = performStreamTracer(opts, laplaceField, inputData, inputData2);
+		/*vtkPolyData* streams = performStreamTracer(opts, laplaceField, inputData, inputData2);
 		laplaceField->Delete();
-		streams = performStreamTracerPostProcessing(streams, inputData, inputData2);
+		streams = performStreamTracerPostProcessing(streams, inputData, inputData2);*/
+		vtkPolyData* streams = performStreamTracerBatch(opts, laplaceField, inputData, inputData2);
+		laplaceField->Delete();
 		/*vio.writeFile(outputStream, streams);
 		runPrintTraceCorrespondence(opts, inputObj1, outputStream, outputMesh, inputData);*/
 		runPrintTraceCorrespondence_(opts, inputObj1, streams, outputMesh, inputData);
