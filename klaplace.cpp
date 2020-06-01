@@ -3,6 +3,8 @@
 #include "kgeometry.h"
 #include "kvolume.h"
 
+#include <omp.h>
+
 using namespace std;
 using namespace pi;
 
@@ -24,7 +26,8 @@ void processGeometryCommands(Options& opts, StringVector& args) {
 }
 
 int main(int argc, char* argv[]) {
-	clock_t t1 = clock();
+	//clock_t t1 = clock();
+    double t1 = omp_get_wtime();
 
     Options opts;
     opts.addOption("-h", "print help message", SO_NONE);
@@ -43,8 +46,9 @@ int main(int argc, char* argv[]) {
     processVolumeCommands(opts, args);
 	processGeometryCommands(opts, args);
 	
-	clock_t t2 = clock();
-	cout << "Elapsed Time: " << (t2-t1)*(1e-3) << " ms" << endl;
+	//clock_t t2 = clock();
+    double t2 = omp_get_wtime();
+	cout << "Elapsed Time: " << (t2-t1) << " sec" << endl;
 	
     return 0;
 }
