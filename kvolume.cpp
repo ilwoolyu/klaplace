@@ -547,6 +547,49 @@ bool performLineClipping(vtkPolyData* streamLines, vtkModifiedBSPTree* tree, int
 	return foundEndpoint;
 }
 
+bool performLineClippingSimple(vtkPolyData* streamLines, vtkModifiedBSPTree* tree, vtkCell* lineToClip, vtkPoints* outputPoints, int &numPoints) {
+	/// - Iterate over all points in a line
+	vtkIdList* ids = lineToClip->GetPointIds();
+
+	/// - Identify a line segment included in the line
+	bool foundEndpoint = false;
+
+	double x[3] = {-1,-1,-1};
+	int j = ids->GetNumberOfIds() - 1;
+	for (; j >= 2 && !foundEndpoint; j--) {    // IL: inverse search for fast clipping
+		double p1[3], p2[3];
+		streamLines->GetPoint(ids->GetId(j-1), p1);
+		streamLines->GetPoint(ids->GetId(j), p2);
+
+		int subId;
+		double t = 0;
+
+		double pcoords[3] = { -1, };
+		foundEndpoint = tree->IntersectWithLine(p1, p2, 0.01, t, x, pcoords, subId);
+		//cout << testLine << "; " << x[0] << "," << x[1] << "," << x[2] << endl;
+	}
+	numPoints = 0;
+	if (ids->GetNumberOfIds() > 2) {
+		j++;
+		if (!foundEndpoint) {
+			streamLines->GetPoint(ids->GetId(j), x);
+		}
+		int b = max(0,j-2);
+		double p[3];
+		streamLines->GetPoint(ids->GetId(b), p);
+		outputPoints->InsertNextPoint(p);
+		numPoints++;
+		for (int k = b+1; k < j; k++) {
+			streamLines->GetPoint(ids->GetId(k), p);
+			outputPoints->InsertNextPoint(p);
+			numPoints++;
+		}
+		outputPoints->InsertNextPoint(x);
+		numPoints++;
+	}
+
+	return foundEndpoint;
+}
 
 vtkPolyData* performStreamTracerPostProcessing(vtkPolyData* streamLines, vtkPolyData* seedPoints, vtkPolyData* destinationSurface) {
 	
@@ -742,40 +785,29 @@ vtkPolyData* performStreamTracerBatch(Options& opts, vtkDataSet* inputData, vtkP
 	const int nInputPoints = inputSeedPoints->GetNumberOfPoints();
 	cout << "# of seed points: " << nInputPoints << endl;
 
-	/// - Prepare the output for the input points
-	vtkDoubleArray* streamLineLengthPerPoint = vtkDoubleArray::New();
-	streamLineLengthPerPoint->SetNumberOfTuples(nInputPoints);
-	streamLineLengthPerPoint->SetName("Length");
-	streamLineLengthPerPoint->SetNumberOfComponents(1);
-	streamLineLengthPerPoint->FillComponent(0, 0);
-
-	vtkIntArray* lineCorrect = vtkIntArray::New();
-	lineCorrect->SetName("LineOK");
-	lineCorrect->SetNumberOfValues(nInputPoints);
-	lineCorrect->FillComponent(0, 0);
-
-	inputSeedPoints->GetPointData()->SetScalars(streamLineLengthPerPoint);
-	inputSeedPoints->GetPointData()->AddArray(lineCorrect);
-
 	// line clipping
 	vtkPoints* outputPoints = vtkPoints::New();
 	vtkCellArray* outputCells = vtkCellArray::New();
 
-	/// construct a tree locator
-	vtkModifiedBSPTree* tree = vtkModifiedBSPTree::New();
-	tree->SetDataSet(destSurf);
-	tree->BuildLocator();
-
 	vtkIntArray* pointIds = vtkIntArray::New();
 	pointIds->SetName("PointIds");
 
-	const char *env = getenv("OMP_NUM_THREADS");
-	int thread = (env != NULL) ? max(atoi(env), 1) : 1;
-	//int thread = 4;
+	int thread = opts.GetStringAsInt("-thread", 0);
+	if (thread <= 0) {
+		const char *env = getenv("OMP_NUM_THREADS");
+		thread = (env != NULL) ? max(atoi(env), 1) : 1;
+	}
+	omp_set_num_threads(thread);
+	cout << "OpenMP threads: " << thread << endl;
+
 	vtkStreamTracer** tracer_array = new vtkStreamTracer*[thread];
 	vtkPolyData** poly_array = new vtkPolyData*[thread];
 	vtkPoints** point_array = new vtkPoints*[thread];
 	vtkPolyData** streamLines_array = new vtkPolyData*[thread];
+	vtkPoints** outputPoints_array = new vtkPoints*[thread];
+	vtkIntArray** pointIds_array = new vtkIntArray*[thread];
+	vtkIntArray** pointNum_array = new vtkIntArray*[thread];
+	vtkModifiedBSPTree** tree_array = new vtkModifiedBSPTree*[thread];
 
 	string traceDirection = opts.GetString("-traceDirection", "forward");
 	for (int i = 0; i < thread; i++)
@@ -783,6 +815,13 @@ vtkPolyData* performStreamTracerBatch(Options& opts, vtkDataSet* inputData, vtkP
 		tracer_array[i] = vtkStreamTracer::New();
 		poly_array[i] = vtkPolyData::New();
 		point_array[i] = vtkPoints::New();
+		outputPoints_array[i] = vtkPoints::New();
+		pointIds_array[i] = vtkIntArray::New();
+		pointNum_array[i] = vtkIntArray::New();
+		// construct a tree locator
+		tree_array[i] = vtkModifiedBSPTree::New();
+		tree_array[i]->SetDataSet(destSurf);
+		tree_array[i]->BuildLocator();
 
 		vtkStreamTracer* tracer = tracer_array[i];
 		// tracer->SetInterpolatorTypeToDataSetPointLocator();
@@ -813,11 +852,13 @@ vtkPolyData* performStreamTracerBatch(Options& opts, vtkDataSet* inputData, vtkP
 	}
 
 	int noLines = 0;
-	int partition = 8;
-	int batch = (nInputPoints / partition + (nInputPoints % partition > 0));
+	// int partition = 8;
+	// int batch = (nInputPoints / partition + (nInputPoints % partition > 0));
+	int batch = 20000;
 
 	for (int i = 0; i < nInputPoints; i += batch) {
-		cout << "Batch: " << (i / batch + 1) << endl;
+		cout << "Batch " << (i / batch + 1) << " ... ";
+		fflush(stdout);
 		/// StreamTracer should have a point-wise gradient field
 		/// - Set up tracer (Use RK45, both direction, initial step 0.05, maximum propagation 500
 		int size = min(batch, nInputPoints - i);
@@ -829,6 +870,9 @@ vtkPolyData* performStreamTracerBatch(Options& opts, vtkDataSet* inputData, vtkP
 			vtkPoints* point = point_array[n];
 			vtkPolyData* streamLines = streamLines_array[n];
 			point->Reset();
+			pointIds_array[n]->Reset();
+			outputPoints_array[n]->Reset();
+			pointNum_array[n]->Reset();
 			for (int j = min_batch * n; j < min(min_batch * (n + 1), size); j++) {
 				double p[3];
 				points->GetPoint(i + j, p);
@@ -839,12 +883,7 @@ vtkPolyData* performStreamTracerBatch(Options& opts, vtkDataSet* inputData, vtkP
 			streamLines->GetPointData()->Reset();
 			streamLines->BuildCells();
 			streamLines->BuildLinks();
-		}
 
-		//cout << "Assigning length to each source vertex ..." << endl;
-		for (int n = 0; n < thread; n++)
-		{
-			vtkPolyData* streamLines = streamLines_array[n];
 			vtkDataArray* seedIds = streamLines->GetCellData()->GetScalars("SeedIds");
 			if (seedIds) {
 				int nCells = streamLines->GetNumberOfCells();
@@ -854,25 +893,39 @@ vtkPolyData* performStreamTracerBatch(Options& opts, vtkDataSet* inputData, vtkP
 					if (pid > -1) {
 						pid += (i + n * min_batch);
 						vtkCell* line = streamLines->GetCell(j);
+						int numPoints;
 						/// - Assume that a line starts from a point on the input mesh and must meet at the opposite surface of the starting point.
-						bool lineAdded = performLineClipping(streamLines, tree, i, line, outputPoints, outputCells, length);
-						if (lineAdded) {
-							pointIds->InsertNextValue(pid);
-							streamLineLengthPerPoint->SetValue(pid, length);
-							lineCorrect->SetValue(pid, 1);
-						} else {
-							pointIds->InsertNextValue(pid);
-							streamLineLengthPerPoint->SetValue(pid, length);
-							lineCorrect->SetValue(pid, 2);
+						bool lineAdded = performLineClippingSimple(streamLines, tree_array[n], line, outputPoints_array[n], numPoints);
+						pointIds_array[n]->InsertNextValue(pid);
+						pointNum_array[n]->InsertNextValue(numPoints);
+						if (!lineAdded) {
+							#pragma omp atomic
 							noLines++;
 						}
 					}
 				}
 			} else {
 				cout << "Can't find SeedIds" << endl;
-				return NULL;
+				exit(1);
 			}
 		}
+		for (int n = 0; n < thread; n++) {
+			int id = 0;
+			std::vector<vtkIdType> idList;
+			for (int j = 0; j < outputPoints_array[n]->GetNumberOfPoints(); j++) {
+				idList.push_back(outputPoints->GetNumberOfPoints());
+				if (idList.size() == pointNum_array[n]->GetValue(id)) {
+					outputCells->InsertNextCell(idList.size(), &idList[0]);
+					idList.clear();
+					id++;
+				}
+				outputPoints->InsertNextPoint(outputPoints_array[n]->GetPoint(j));
+			}
+			for (int j = 0; j < pointIds_array[n]->GetNumberOfValues(); j++) {
+				pointIds->InsertNextValue(pointIds_array[n]->GetValue(j));
+			}
+		}
+		cout << "done" << endl;
 	}
 	cout << "# of clipping failure: " << noLines << endl;
 	vtkPolyData* outputStreamLines = vtkPolyData::New();
@@ -1109,6 +1162,8 @@ void processVolumeOptions(Options& opts) {
 	opts.addOption("-dims", "x-y-z dimensions", "-dims 100", SO_REQ_SEP);
 	
 	opts.addOption("-surfaceCorrespondence", "Construct a surface correspondence between two objects; prefix is used for temporary files", "-surfaceCorrespondence source.vtp destination.vtp prefix", SO_NONE);
+
+	opts.addOption("-thread", "# of OpenMP threads", "", SO_REQ_SEP);
 	
 }
 
