@@ -854,7 +854,8 @@ vtkPolyData* performStreamTracerBatch(Options& opts, vtkDataSet* inputData, vtkP
 	int noLines = 0;
 	// int partition = 8;
 	// int batch = (nInputPoints / partition + (nInputPoints % partition > 0));
-	int batch = 20000;
+	int batch = opts.GetStringAsInt("-batchSeed", 20000);
+	if (batch < 1) batch = 20000;
 
 	for (int i = 0; i < nInputPoints; i += batch) {
 		cout << "Batch " << (i / batch + 1) << " ... ";
@@ -1163,8 +1164,9 @@ void processVolumeOptions(Options& opts) {
 	
 	opts.addOption("-surfaceCorrespondence", "Construct a surface correspondence between two objects; prefix is used for temporary files", "-surfaceCorrespondence source.vtp destination.vtp prefix", SO_NONE);
 
+	opts.addOption("-batchSeed", "# of seeds to be traced once (default: 20000)", "", SO_REQ_SEP);
+
 	opts.addOption("-thread", "# of OpenMP threads", "", SO_REQ_SEP);
-	
 }
 
 void processVolumeCommands(Options& opts, StringVector& args) {
