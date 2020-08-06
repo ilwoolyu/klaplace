@@ -554,9 +554,10 @@ bool performLineClippingSimple(vtkPolyData* streamLines, vtkModifiedBSPTree* tre
 	/// - Identify a line segment included in the line
 	bool foundEndpoint = false;
 
-	double x[3] = {-1,-1,-1};
+	double x[3];
 	int j = ids->GetNumberOfIds() - 1;
-	for (; j >= 2 && !foundEndpoint; j--) {    // IL: inverse search for fast clipping
+	streamLines->GetPoint(ids->GetId(j), x);
+	for (; j >= 1 && !foundEndpoint; j--) {    // IL: inverse search for fast clipping
 		double p1[3], p2[3];
 		streamLines->GetPoint(ids->GetId(j-1), p1);
 		streamLines->GetPoint(ids->GetId(j), p2);
@@ -568,25 +569,8 @@ bool performLineClippingSimple(vtkPolyData* streamLines, vtkModifiedBSPTree* tre
 		foundEndpoint = tree->IntersectWithLine(p1, p2, 0.01, t, x, pcoords, subId);
 		//cout << testLine << "; " << x[0] << "," << x[1] << "," << x[2] << endl;
 	}
-	numPoints = 0;
-	if (ids->GetNumberOfIds() > 2) {
-		j++;
-		if (!foundEndpoint) {
-			streamLines->GetPoint(ids->GetId(j), x);
-		}
-		int b = max(0,j-2);
-		double p[3];
-		streamLines->GetPoint(ids->GetId(b), p);
-		outputPoints->InsertNextPoint(p);
-		numPoints++;
-		for (int k = b+1; k < j; k++) {
-			streamLines->GetPoint(ids->GetId(k), p);
-			outputPoints->InsertNextPoint(p);
-			numPoints++;
-		}
-		outputPoints->InsertNextPoint(x);
-		numPoints++;
-	}
+	numPoints = 1;
+	outputPoints->InsertNextPoint(x);
 
 	return foundEndpoint;
 }
@@ -988,9 +972,6 @@ void runPrintTraceCorrespondence_(Options& opts, string inputMeshName, vtkDataSe
 	for (size_t j = 0; j < nCells; j++) {
 		vtkCell* cell = strmesh->GetCell(j);
 		const size_t nPts = cell->GetNumberOfPoints();
-		if (nPts < 2) {
-			continue;
-		}
 		vtkIdType e = cell->GetPointId(nPts-1);
 		
 		double qe[3];
