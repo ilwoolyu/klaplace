@@ -110,6 +110,9 @@ void vtkIO::writeFile(std::string file, vtkDataSet *mesh) {
         w->Delete();
     } else if (endswith(file, ".vtk")) {
         vtkPolyDataWriter* w = vtkPolyDataWriter::New();
+#if VTK_MAJOR_VERSION >= 9
+        w->SetFileVersion(42);
+#endif
         w->SetInputData(mesh);
         w->SetFileName(file.c_str());
         w->Write();
@@ -126,18 +129,18 @@ void vtkIO::writeFile(std::string file, vtkDataSet *mesh) {
         vtkXMLStructuredGridWriter* w = vtkXMLStructuredGridWriter::New();
         w->SetInputData(mesh);
         w->SetFileName(file.c_str());
-		w->SetCompressorTypeToNone();
+        w->SetCompressorTypeToNone();
         w->Write();
         w->Delete();
-	} else if (endswith(file, ".mhd")) {
-		vtkMetaImageWriter* w = vtkMetaImageWriter::New();
+        } else if (endswith(file, ".mhd")) {
+            vtkMetaImageWriter* w = vtkMetaImageWriter::New();
 
-		w->SetInputData(vtkImageData::SafeDownCast(mesh));
-		w->SetFileName(file.c_str());
-		w->Write();
-		w->Delete();
-	}
-	cout << "Write " << file << " done ..." << endl;
+            w->SetInputData(vtkImageData::SafeDownCast(mesh));
+            w->SetFileName(file.c_str());
+            w->Write();
+            w->Delete();
+        }
+        cout << "Write " << file << " done ..." << endl;
 }
 
 
