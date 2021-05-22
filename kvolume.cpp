@@ -781,6 +781,12 @@ vtkPolyData* performStreamTracerBatch(Options& opts, vtkDataSet* inputData, vtkP
 		const char *env = getenv("OMP_NUM_THREADS");
 		thread = (env != NULL) ? max(atoi(env), 1) : 1;
 	}
+	// int partition = 8;
+	// int batch = (nInputPoints / partition + (nInputPoints % partition > 0));
+	int batch = opts.GetStringAsInt("-batchSeed", 0);
+	if (batch < 1) batch = max(thread * 2500, 20000);
+	if (batch > nInputPoints) thread = ceil((float)nInputPoints / 2500);
+
 	omp_set_num_threads(thread);
 	cout << "OpenMP threads: " << thread << endl;
 
@@ -836,10 +842,6 @@ vtkPolyData* performStreamTracerBatch(Options& opts, vtkDataSet* inputData, vtkP
 	}
 
 	int noLines = 0;
-	// int partition = 8;
-	// int batch = (nInputPoints / partition + (nInputPoints % partition > 0));
-	int batch = opts.GetStringAsInt("-batchSeed", 20000);
-	if (batch < 1) batch = 20000;
 
 	for (int i = 0; i < nInputPoints; i += batch) {
 		cout << "Batch " << (i / batch + 1) << " ... ";
@@ -1145,7 +1147,7 @@ void processVolumeOptions(Options& opts) {
 	
 	opts.addOption("-surfaceCorrespondence", "Construct a surface correspondence between two objects; prefix is used for temporary files", "-surfaceCorrespondence source.vtp destination.vtp prefix", SO_NONE);
 
-	opts.addOption("-batchSeed", "# of seeds to be traced once (default: 20000)", "", SO_REQ_SEP);
+	opts.addOption("-batchSeed", "# of seeds to be traced once", "", SO_REQ_SEP);
 
 	opts.addOption("-thread", "# of OpenMP threads", "", SO_REQ_SEP);
 }
